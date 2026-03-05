@@ -10,7 +10,7 @@ WORKSPACE_CONFIG_FILE = ".agent-workspace.json"
 WINDOWS_PATH_RE = re.compile(
     r"(?<!\w)([A-Za-z]:[\\/](?:[^\\/:*?\"<>|\r\n\t '`\[\]\(\)\{\},;]+[\\/]?)*)"
 )
-LINUX_PATH_RE = re.compile(r"(?<![\w:])(/(?:[^/\r\n\t '\"`]+/)*[^/\r\n\t '\"`]+/?)+")
+LINUX_PATH_RE = re.compile(r"(?<![\w:<])(/(?:[^/\r\n\t '\"`]+/)*[^/\r\n\t '\"`]+/?)+")
 UNC_WSL_PATH_RE = re.compile(
     r"(\\\\wsl\$\\[^\\/:*?\"<>|\r\n\t ]+\\(?:[^\\/:*?\"<>|\r\n\t '`\[\]\(\)\{\},;]+\\?)*)",
     re.IGNORECASE,
@@ -27,7 +27,7 @@ def _is_windows_path(path: str) -> bool:
 
 def _trim_path_noise(raw: str) -> str:
     candidate = raw.strip().strip("'\"")
-    return candidate.rstrip(".,;:)]}")
+    return candidate.rstrip(".,;:)]}><")
 
 
 def _finalize_windows_path(raw: str) -> str:
@@ -121,12 +121,20 @@ def detect_from_paths(messages: list[Any]) -> str | None:
         if not text:
             continue
 
-        candidates: list[str] = []
+        candidates: list[tuple[str, int]] = []
         for pattern in (UNC_WSL_PATH_RE, WINDOWS_PATH_RE, LINUX_PATH_RE):
-            candidates.extend(match.group(1) for match in pattern.finditer(text))
+            for match in pattern.finditer(text):
+                candidates.append((match.group(1), match.start(1)))
 
-        for candidate in candidates:
+        candidates.sort(key=lambda item: item[1])
+
+        for candidate, start_idx in candidates:
             if candidate.startswith("//"):
+                continue
+            # Ignore markup-like captures such as </llm-snippet-file>
+            if start_idx > 0 and text[start_idx - 1] == "<":
+                continue
+            if ">" in candidate or "<" in candidate:
                 continue
             workspace = _workspace_from_path_candidate(candidate)
             if workspace:

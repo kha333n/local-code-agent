@@ -18,6 +18,11 @@ def test_detect_from_paths_unc_wsl():
     assert detector.detect_from_paths(messages) == r"\\wsl$\Ubuntu\home\user\repo\app"
 
 
+def test_detect_from_paths_ignores_markup_tag_fragments():
+    messages = [{"role": "user", "content": "Ignore this attachment marker </llm-snippet-file> and continue"}]
+    assert detector.detect_from_paths(messages) is None
+
+
 def test_detect_workspace_fallback_to_default_workspace_env(monkeypatch):
     monkeypatch.delenv("DEFAULT_WORKSPACE", raising=False)
     monkeypatch.setenv("DEFAULT_WORKSPACE", r"C:\projects\from-env")
