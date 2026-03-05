@@ -1,0 +1,2 @@
+"""Workspace detection utilities."""
+

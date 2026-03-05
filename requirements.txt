@@ -1,0 +1,11 @@
+fastapi
+uvicorn
+qdrant-client
+langgraph
+ollama
+python-dotenv
+fastembed
+pydantic
+pydantic-settings
+requests
+pytest

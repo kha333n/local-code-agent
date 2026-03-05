@@ -1,0 +1,89 @@
+Metadata-Version: 2.4
+Name: local-cursor-agent
+Version: 0.1.0
+Summary: Windows-first local Cursor-style coding agent using Ollama, Qdrant, and LangGraph.
+Requires-Python: >=3.11
+Description-Content-Type: text/markdown
+Requires-Dist: fastapi>=0.115.0
+Requires-Dist: uvicorn>=0.30.0
+Requires-Dist: pydantic>=2.8.0
+Requires-Dist: pydantic-settings>=2.4.0
+Requires-Dist: langgraph>=0.2.30
+Requires-Dist: requests>=2.32.0
+Provides-Extra: dev
+Requires-Dist: pytest>=8.0.0; extra == "dev"
+
+# local-cursor-agent
+
+Windows-first local Cursor-style coding agent using Ollama + Qdrant + LangGraph.
+
+## Architecture
+- FastAPI server (`app/main.py`)
+- LangGraph pipeline (`plan -> retrieve -> propose_patch -> apply_patch -> run_tests -> fix_loop -> summarize`)
+- Per-workspace Qdrant collections (`ws_<hash>`)
+- Local Ollama chat + embeddings
+
+## Dynamic Workspaces
+Each request can pass workspace path via:
+- JSON body field `workspace`
+- header `X-Workspace-Path`
+
+Workspace registry file:
+- `~/.local-agent/workspaces.json`
+
+If workspace is not trusted/allowed, API returns:
+```json
+{"error":"workspace_not_registered"}
+```
+
+## Workspace Authorization Flow
+Client can call:
+- `POST /workspace/authorize` with `action`:
+  - `allow_once`
+  - `allow_always`
+  - `deny`
+
+## Policies
+Per-workspace policy file:
+- `~/.local-agent/policies/<workspace_hash>.json`
+
+Fields:
+- `allowed_commands`
+- `allow_git`
+- `write_paths`
+
+If a tool call is blocked by policy, API returns:
+```json
+{"tool_request":"run_cmd","command":"php artisan test"}
+```
+
+## Endpoints
+- `GET /health`
+- `POST /workspace/register`
+- `POST /workspace/authorize`
+- `POST /workspace/index`
+- `POST /workspace/tool`
+- `GET /v1/models`
+- `POST /v1/chat/completions`
+
+## OpenAI Model ID
+- `local-qwen2.5-coder-7b-rag`
+
+## Local Run
+1. `pip install -e .[dev]`
+2. `./scripts/start-qdrant.ps1`
+3. Ensure Ollama is running with `qwen2.5-coder:7b`
+4. `python -m app`
+
+## PowerShell Scripts
+- `scripts/start-qdrant.ps1`
+- `scripts/stop-qdrant.ps1`
+- `scripts/run-agent.ps1`
+- `scripts/index-workspace.ps1`
+- `scripts/curl-chat.ps1`
+
+## Tests
+- `tests/test_chunker.py`
+- `tests/test_vector_retrieval.py`
+- `tests/test_patch_sandbox.py`
+- `tests/test_openai_schema.py`

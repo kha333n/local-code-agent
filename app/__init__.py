@@ -1,0 +1,1 @@
+"""local-cursor-agent package."""

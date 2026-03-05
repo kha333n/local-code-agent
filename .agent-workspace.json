@@ -1,0 +1,10 @@
+{
+  "workspace_root": "C:\\agent\\local-cursor-agent",
+  "qdrant_collection": "ws_fa7ba",
+  "trusted": true,
+  "allowed_commands": [
+    "php",
+    "composer",
+    "npm"
+  ]
+}
