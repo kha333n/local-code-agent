@@ -28,6 +28,18 @@ cd "$PROJECT_DIR"
 AGENT_HOST="${AGENT_HOST:-127.0.0.1}"
 AGENT_PORT="${AGENT_PORT:-3210}"
 QDRANT_CONTAINER="${QDRANT_CONTAINER:-local-cursor-agent-qdrant}"
+if [[ -z "${OLLAMA_BASE_URL:-}" ]]; then
+  if grep -qi microsoft /proc/version 2>/dev/null; then
+    WSL_GATEWAY="$(ip route | awk '/default/ {print $3; exit}')"
+    if [[ -n "$WSL_GATEWAY" ]]; then
+      OLLAMA_BASE_URL="http://${WSL_GATEWAY}:11434"
+      export OLLAMA_BASE_URL
+      echo "Detected WSL. Using OLLAMA_BASE_URL=${OLLAMA_BASE_URL}"
+    fi
+  fi
+fi
+OLLAMA_BASE_URL="${OLLAMA_BASE_URL:-http://127.0.0.1:11434}"
+export OLLAMA_BASE_URL
 export AGENT_HOST
 export AGENT_PORT
 
@@ -58,6 +70,14 @@ if [[ "$QDRANT_READY" -ne 1 ]]; then
   exit 1
 fi
 echo "Qdrant is ready."
+
+echo "Checking Ollama..."
+if ! curl -fsS "${OLLAMA_BASE_URL}/api/tags" >/dev/null 2>&1; then
+  echo "Ollama is not reachable at ${OLLAMA_BASE_URL}"
+  echo "Set OLLAMA_BASE_URL explicitly and retry."
+  exit 1
+fi
+echo "Ollama reachable: ${OLLAMA_BASE_URL}"
 
 python3 -m app >"$RUNTIME_DIR/agent.out.log" 2>"$RUNTIME_DIR/agent.err.log" &
 echo $! >"$RUNTIME_DIR/agent.pid"

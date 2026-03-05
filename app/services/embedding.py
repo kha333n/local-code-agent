@@ -6,11 +6,12 @@ from typing import Any
 import requests
 
 from app.config import settings
+from app.utils.network import resolve_ollama_base_url
 
 
 class Embedder:
     def __init__(self, base_url: str | None = None, model: str | None = None) -> None:
-        self.base_url = (base_url or settings.ollama_base_url).rstrip("/")
+        self.base_url = resolve_ollama_base_url((base_url or settings.ollama_base_url).rstrip("/"))
         self.model = model or settings.embedding_model
 
     def embed(self, text: str) -> list[float]:

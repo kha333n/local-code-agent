@@ -166,6 +166,11 @@ chmod +x scripts/*.sh
 ./scripts/start-all.sh
 ```
 `start-all.sh` requires Docker and will start/validate Qdrant automatically. If Docker is unavailable or not running, the script exits with an error.
+For WSL, if Ollama runs on Windows host, the script auto-detects the Windows gateway and sets `OLLAMA_BASE_URL` to `http://<gateway-ip>:11434`.
+You can also set it manually:
+```bash
+export OLLAMA_BASE_URL="http://$(ip route | awk '/default/ {print $3; exit}'):11434"
+```
 
 ## PowerShell Scripts
 - `scripts/start-qdrant.ps1`

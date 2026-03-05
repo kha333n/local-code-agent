@@ -6,11 +6,12 @@ import requests
 
 from app.config import settings
 from app.utils.logger import logger
+from app.utils.network import resolve_ollama_base_url
 
 
 class OllamaClient:
     def __init__(self, base_url: str | None = None, chat_model: str | None = None) -> None:
-        self.base_url = (base_url or settings.ollama_base_url).rstrip("/")
+        self.base_url = resolve_ollama_base_url((base_url or settings.ollama_base_url).rstrip("/"))
         self.chat_model = chat_model or settings.chat_model
 
     def chat(self, messages: list[dict[str, str]], model: str | None = None) -> str:
