@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -30,7 +31,7 @@ def parse_workspace_command(messages: list[dict[str, str]]) -> WorkspaceCommand 
         return None
 
     if user_content.lower().startswith("@path "):
-        arg = user_content[6:].strip()
+        arg = _extract_path_argument(user_content)
         return WorkspaceCommand(name="path", argument=arg)
     if user_content.lower() == "@skip":
         return WorkspaceCommand(name="skip")
@@ -39,6 +40,19 @@ def parse_workspace_command(messages: list[dict[str, str]]) -> WorkspaceCommand 
     if user_content.lower() == "@reset":
         return WorkspaceCommand(name="reset")
     return None
+
+
+def _extract_path_argument(user_content: str) -> str:
+    remainder = user_content[5:].lstrip()  # remove "@path"
+    if not remainder:
+        return ""
+
+    # Only parse the first line so extra pasted context does not become path text.
+    first_line = remainder.splitlines()[0].strip()
+    match = re.match(r'^(?:"([^"]+)"|\'([^\']+)\'|(\S+))', first_line)
+    if not match:
+        return first_line
+    return str(match.group(1) or match.group(2) or match.group(3) or "")
 
 
 def _normalize_workspace_input(workspace_root: str) -> tuple[str, Path]:

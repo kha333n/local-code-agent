@@ -179,3 +179,29 @@ def test_path_command_resolves_relative_path_from_cwd(monkeypatch, tmp_path):
     assert response.status_code == 200
     content = response.json()["choices"][0]["message"]["content"]
     assert "Workspace set to" in content
+
+
+def test_path_command_ignores_following_multiline_context(monkeypatch, tmp_path):
+    routes.workspace_session.reset()
+
+    def fake_ensure_collection(name: str, vector_size: int):
+        return None
+
+    monkeypatch.setattr(routes.vector_store, "ensure_collection", fake_ensure_collection)
+
+    noisy_message = (
+        f'@path "{tmp_path}"\n\n'
+        "Don't mention code from context attachments unless it's needed\n"
+        "<context-attachment>\n"
+        "  <attachment-name>Changes</attachment-name>\n"
+        "</context-attachment>"
+    )
+
+    client = TestClient(app)
+    body = {
+        "model": "gpt-4o-mini",
+        "messages": [{"role": "user", "content": noisy_message}],
+    }
+    response = client.post("/v1/chat/completions", json=body)
+    assert response.status_code == 200
+    assert "Workspace set to" in response.json()["choices"][0]["message"]["content"]
