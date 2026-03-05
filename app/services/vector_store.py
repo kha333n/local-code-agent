@@ -8,6 +8,7 @@ from typing import Any
 import requests
 
 from app.config import settings
+from app.utils.logger import logger
 
 
 @dataclass
@@ -55,16 +56,22 @@ class QdrantVectorStore:
         self.base_url = (url or settings.qdrant_url).rstrip("/")
 
     def recreate_collection(self, name: str) -> None:
+        logger.info("Qdrant recreate collection requested: %s", name)
         requests.delete(f"{self.base_url}/collections/{name}", timeout=20)
         self._create_collection(name, settings.vector_size)
+        logger.info("Qdrant collection recreated: %s", name)
 
     def ensure_collection(self, name: str, vector_size: int) -> None:
+        logger.info("Qdrant ensure collection requested: %s", name)
         resp = requests.get(f"{self.base_url}/collections/{name}", timeout=20)
         if resp.status_code == 200:
+            logger.info("Qdrant collection exists: %s", name)
             return
         self._create_collection(name, vector_size)
+        logger.info("Qdrant collection created: %s", name)
 
     def _create_collection(self, name: str, vector_size: int) -> None:
+        logger.info("Qdrant collection create step: name=%s size=%s", name, vector_size)
         body = {
             "vectors": {
                 "size": vector_size,
@@ -75,6 +82,7 @@ class QdrantVectorStore:
         resp.raise_for_status()
 
     def upsert_chunks(self, name: str, vectors: list[list[float]], payloads: list[dict[str, Any]]) -> None:
+        logger.info("Qdrant upsert chunks requested: collection=%s count=%s", name, len(payloads))
         points = []
         for vec, payload in zip(vectors, payloads, strict=True):
             point_id = int(hashlib.sha1(payload["chunk_hash"].encode("utf-8")).hexdigest()[:15], 16)
@@ -84,8 +92,10 @@ class QdrantVectorStore:
         body = {"points": points}
         resp = requests.put(f"{self.base_url}/collections/{name}/points?wait=true", json=body, timeout=60)
         resp.raise_for_status()
+        logger.info("Qdrant upsert chunks completed: collection=%s count=%s", name, len(points))
 
     def search(self, name: str, query_vector: list[float], limit: int) -> list[RetrievedChunk]:
+        logger.info("Qdrant search requested: collection=%s limit=%s", name, limit)
         body = {
             "vector": query_vector,
             "limit": limit,
@@ -98,4 +108,5 @@ class QdrantVectorStore:
         out: list[RetrievedChunk] = []
         for item in result:
             out.append(RetrievedChunk(score=float(item.get("score", 0.0)), payload=dict(item.get("payload") or {})))
+        logger.info("Qdrant search completed: collection=%s results=%s", name, len(out))
         return out

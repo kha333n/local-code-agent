@@ -6,6 +6,7 @@ from pathlib import Path
 from app.config import settings
 from app.services.indexer import WorkspaceIndexer
 from app.services.vector_store import QdrantVectorStore
+from app.utils.logger import logger
 from app.workspace.config import ensure_workspace_config
 from app.workspace.detector import normalize_workspace_path
 from app.workspace.session import WorkspaceSessionStore
@@ -45,22 +46,28 @@ def execute_workspace_command(
     indexer: WorkspaceIndexer,
     vector_store: QdrantVectorStore,
 ) -> str:
+    logger.info("Workspace command received: %s arg=%s", command.name, command.argument)
     if command.name == "path":
         ws = normalize_workspace_path(command.argument or "")
         root = Path(ws)
         if not ws or not root.exists() or not root.is_dir():
-            return "Invalid workspace path. Please provide an existing project directory."
+            raise FileNotFoundError("Invalid workspace path. Please provide an existing project directory.")
 
+        logger.info("Workspace path validated: %s", ws)
         metadata = ensure_workspace_config(ws)
         collection = str(metadata["collection"])
+        logger.info("Creating or ensuring Qdrant collection: %s", collection)
         vector_store.ensure_collection(collection, settings.vector_size)
+        logger.info("Qdrant collection created/ensured: %s", collection)
         session.set_workspace(str(metadata["workspace_root"]))
+        logger.info("Workspace trusted: %s", metadata.get("trusted"))
         return f"Workspace set to {metadata['workspace_root']} (collection: {collection})."
 
     if command.name == "index":
         state = session.snapshot()
         if state.stateless or not state.workspace:
             return "Please provide project root path to enable project context."
+        logger.info("Indexing started: %s", state.workspace)
         result = indexer.index_workspace(state.workspace, recreate=False)
         return (
             f"Workspace indexed: {state.workspace} | collection: {result['collection']} | "
@@ -76,4 +83,3 @@ def execute_workspace_command(
         return "Workspace cleared. Stateless mode enabled."
 
     return "Unknown workspace command."
-

@@ -115,12 +115,31 @@ If a tool call is blocked by policy, API returns:
 ## Endpoints
 - `GET /health`
 - `GET /healthz`
+- `GET /debug`
 - `POST /workspace/register`
 - `POST /workspace/authorize`
 - `POST /workspace/index`
 - `POST /workspace/tool`
 - `GET /v1/models`
 - `POST /v1/chat/completions`
+
+## Debugging
+Structured error responses are returned with full details and traceback for local debugging.
+
+Example shape:
+```json
+{
+  "error": "workspace_init_failed",
+  "message": "Workspace command failed",
+  "details": {
+    "workspace_root": "/home/user/project",
+    "step": "qdrant_collection_create",
+    "exception_type": "ConnectionRefusedError",
+    "exception_message": "Failed to connect to Qdrant",
+    "traceback": "<full python traceback>"
+  }
+}
+```
 
 ## OpenAI Model ID
 - `gpt-4o-mini` (OpenAI-compatible public model id)

@@ -5,6 +5,7 @@ from typing import Any
 import requests
 
 from app.config import settings
+from app.utils.logger import logger
 
 
 class OllamaClient:
@@ -13,8 +14,10 @@ class OllamaClient:
         self.chat_model = chat_model or settings.chat_model
 
     def chat(self, messages: list[dict[str, str]], model: str | None = None) -> str:
+        target_model = model or self.chat_model
+        logger.info("Ollama chat request: model=%s messages=%s", target_model, len(messages))
         payload: dict[str, Any] = {
-            "model": model or self.chat_model,
+            "model": target_model,
             "messages": messages,
             "stream": False,
         }
@@ -23,4 +26,5 @@ class OllamaClient:
         data = response.json()
         msg = data.get("message", {})
         content = msg.get("content", "")
+        logger.info("Ollama chat response received: chars=%s", len(str(content)))
         return str(content)
