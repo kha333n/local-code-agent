@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+import os
 
 from fastapi.testclient import TestClient
+import pytest
 
 from app.api import routes
 from app.main import app
@@ -98,3 +100,82 @@ def test_reset_command_clears_workspace(monkeypatch, tmp_path):
         json={"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hello"}]},
     )
     assert calls["workspace"] == "none"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Linux absolute path behavior")
+def test_path_command_accepts_absolute_linux_path(monkeypatch, tmp_path):
+    routes.workspace_session.reset()
+
+    def fake_ensure_collection(name: str, vector_size: int):
+        return None
+
+    monkeypatch.setattr(routes.vector_store, "ensure_collection", fake_ensure_collection)
+
+    client = TestClient(app)
+    body = {
+        "model": "gpt-4o-mini",
+        "messages": [{"role": "user", "content": f"@path {tmp_path.as_posix()}"}],
+    }
+    response = client.post("/v1/chat/completions", json=body)
+    assert response.status_code == 200
+    assert "Workspace set to" in response.json()["choices"][0]["message"]["content"]
+
+
+def test_path_command_accepts_trailing_whitespace(monkeypatch, tmp_path):
+    routes.workspace_session.reset()
+
+    def fake_ensure_collection(name: str, vector_size: int):
+        return None
+
+    monkeypatch.setattr(routes.vector_store, "ensure_collection", fake_ensure_collection)
+
+    client = TestClient(app)
+    body = {
+        "model": "gpt-4o-mini",
+        "messages": [{"role": "user", "content": f"@path {tmp_path}   "}],
+    }
+    response = client.post("/v1/chat/completions", json=body)
+    assert response.status_code == 200
+    assert "Workspace set to" in response.json()["choices"][0]["message"]["content"]
+
+
+@pytest.mark.parametrize("quote", ['"', "'"])
+def test_path_command_accepts_quoted_path(monkeypatch, tmp_path, quote):
+    routes.workspace_session.reset()
+
+    def fake_ensure_collection(name: str, vector_size: int):
+        return None
+
+    monkeypatch.setattr(routes.vector_store, "ensure_collection", fake_ensure_collection)
+
+    client = TestClient(app)
+    body = {
+        "model": "gpt-4o-mini",
+        "messages": [{"role": "user", "content": f"@path {quote}{tmp_path}{quote}"}],
+    }
+    response = client.post("/v1/chat/completions", json=body)
+    assert response.status_code == 200
+    assert "Workspace set to" in response.json()["choices"][0]["message"]["content"]
+
+
+def test_path_command_resolves_relative_path_from_cwd(monkeypatch, tmp_path):
+    routes.workspace_session.reset()
+
+    workspace_dir = tmp_path / "project"
+    workspace_dir.mkdir()
+    monkeypatch.chdir(tmp_path)
+
+    def fake_ensure_collection(name: str, vector_size: int):
+        return None
+
+    monkeypatch.setattr(routes.vector_store, "ensure_collection", fake_ensure_collection)
+
+    client = TestClient(app)
+    body = {
+        "model": "gpt-4o-mini",
+        "messages": [{"role": "user", "content": "@path project"}],
+    }
+    response = client.post("/v1/chat/completions", json=body)
+    assert response.status_code == 200
+    content = response.json()["choices"][0]["message"]["content"]
+    assert "Workspace set to" in content

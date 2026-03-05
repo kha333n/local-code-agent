@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -29,7 +30,7 @@ def parse_workspace_command(messages: list[dict[str, str]]) -> WorkspaceCommand 
         return None
 
     if user_content.lower().startswith("@path "):
-        arg = user_content[6:].strip().strip("'\"")
+        arg = user_content[6:].strip()
         return WorkspaceCommand(name="path", argument=arg)
     if user_content.lower() == "@skip":
         return WorkspaceCommand(name="skip")
@@ -40,6 +41,16 @@ def parse_workspace_command(messages: list[dict[str, str]]) -> WorkspaceCommand 
     return None
 
 
+def _normalize_workspace_input(workspace_root: str) -> tuple[str, Path]:
+    raw = workspace_root
+    norm = raw.strip().strip('"').strip("'")
+    p = Path(norm).expanduser()
+    if not p.is_absolute():
+        p = Path(os.getcwd()) / p
+    # Safe canonicalization without strict existence requirement.
+    return raw, p.resolve(strict=False)
+
+
 def execute_workspace_command(
     command: WorkspaceCommand,
     session: WorkspaceSessionStore,
@@ -48,11 +59,18 @@ def execute_workspace_command(
 ) -> str:
     logger.info("Workspace command received: %s arg=%s", command.name, command.argument)
     if command.name == "path":
-        ws = normalize_workspace_path(command.argument or "")
-        root = Path(ws)
-        if not ws or not root.exists() or not root.is_dir():
-            raise FileNotFoundError("Invalid workspace path. Please provide an existing project directory.")
+        raw, workspace_path = _normalize_workspace_input(command.argument or "")
+        exists = workspace_path.exists()
+        is_dir = workspace_path.is_dir()
+        has_workspace_config = (workspace_path / ".agent-workspace.json").exists()
+        if not ((exists and is_dir) or has_workspace_config):
+            raise FileNotFoundError(
+                "Invalid workspace path. "
+                f"raw={raw!r} normalized={str(workspace_path)!r} "
+                f"cwd={os.getcwd()!r} exists={exists} is_dir={is_dir}"
+            )
 
+        ws = normalize_workspace_path(str(workspace_path))
         logger.info("Workspace path validated: %s", ws)
         metadata = ensure_workspace_config(ws)
         collection = str(metadata["collection"])

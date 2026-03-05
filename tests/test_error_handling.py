@@ -100,3 +100,22 @@ def test_workspace_tool_file_access_error_is_structured(tmp_path):
     assert payload["details"]["exception_type"] == "FileNotFoundError"
     assert "traceback" in payload["details"]
 
+
+def test_chat_path_error_includes_workspace_diagnostics(tmp_path):
+    routes.workspace_session.reset()
+    missing = tmp_path / "missing_project"
+
+    client = TestClient(app)
+    body = {
+        "model": "gpt-4o-mini",
+        "messages": [{"role": "user", "content": f'@path "{missing}"'}],
+    }
+    response = client.post("/v1/chat/completions", json=body)
+    assert response.status_code == 200
+    payload = response.json()
+    content = payload["choices"][0]["message"]["content"]
+    assert "exception_type: FileNotFoundError" in content
+    assert "raw=" in content
+    assert "normalized=" in content
+    assert "exists=False" in content
+    assert "is_dir=False" in content
