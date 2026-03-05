@@ -5,6 +5,7 @@ import os
 import platform
 import sys
 import time
+import traceback
 from collections.abc import Iterator
 
 from fastapi import APIRouter, Header
@@ -159,9 +160,90 @@ def _stream_chunks(content: str) -> Iterator[str]:
     yield "data: [DONE]\n\n"
 
 
-def _stream_error(error_payload: dict) -> Iterator[str]:
-    yield f"data: {json.dumps(error_payload, ensure_ascii=False)}\n\n"
+def _build_openai_error_content(
+    *,
+    exc: Exception,
+    request_model: str | None,
+    workspace_root: str | None,
+    step: str,
+) -> str:
+    return (
+        "[local-cursor-agent error]\n"
+        f"step: {step}\n"
+        f"exception_type: {type(exc).__name__}\n"
+        f"exception_message: {str(exc)}\n"
+        f"workspace_root: {workspace_root}\n"
+        f"qdrant_url: {settings.qdrant_url}\n"
+        f"ollama_url: {settings.ollama_base_url}\n"
+        f"request_model: {request_model or OPENAI_PUBLIC_MODEL}\n"
+        "traceback:\n"
+        f"{traceback.format_exc()}"
+    )
+
+
+def _openai_error_non_stream(*, content: str, request_model: str | None) -> dict:
+    return {
+        "id": "chatcmpl-local-error",
+        "object": "chat.completion",
+        "created": int(time.time()),
+        "model": request_model or OPENAI_PUBLIC_MODEL,
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": content},
+                "finish_reason": "stop",
+            }
+        ],
+    }
+
+
+def _openai_stream_error_chunks(*, content: str, request_model: str | None) -> Iterator[str]:
+    created = int(time.time())
+    model = request_model or OPENAI_PUBLIC_MODEL
+    first_chunk = {
+        "id": "chatcmpl-local-error",
+        "object": "chat.completion.chunk",
+        "created": created,
+        "model": model,
+        "choices": [
+            {
+                "index": 0,
+                "delta": {"content": content},
+                "finish_reason": None,
+            }
+        ],
+    }
+    yield f"data: {json.dumps(first_chunk, ensure_ascii=False)}\n\n"
+
+    final_chunk = {
+        "id": "chatcmpl-local-error",
+        "object": "chat.completion.chunk",
+        "created": created,
+        "model": model,
+        "choices": [
+            {
+                "index": 0,
+                "delta": {},
+                "finish_reason": "stop",
+            }
+        ],
+    }
+    yield f"data: {json.dumps(final_chunk, ensure_ascii=False)}\n\n"
     yield "data: [DONE]\n\n"
+
+
+def _stream_chunks_safe(content: str, request_model: str | None, workspace_root: str | None) -> Iterator[str]:
+    try:
+        yield from _stream_chunks(content)
+    except Exception as exc:
+        logger.exception("Streaming generation failed")
+        error_content = _build_openai_error_content(
+            exc=exc,
+            request_model=request_model,
+            workspace_root=workspace_root,
+            step="stream_generation",
+        )
+        yield from _openai_stream_error_chunks(content=error_content, request_model=request_model)
 
 
 def _non_stream_response(content: str) -> dict:
@@ -390,19 +472,28 @@ def chat_completions(
     x_workspace_path: str | None = Header(default=None, alias="X-Workspace-Path"),
     accept: str | None = Header(default=None),
 ):
-    messages = [m.model_dump() for m in payload.messages]
-    command = parse_workspace_command(messages)
-    request_json = payload.model_dump(exclude_none=True)
-    if x_workspace_path:
-        request_json["x_workspace_path"] = x_workspace_path
+    stream_requested = _is_stream_request(payload, accept)
+    requested_model = payload.model or OPENAI_PUBLIC_MODEL
+    resolved_workspace: str | None = None
+    workspace_hint: str | None = None
+    step = "request_init"
+    try:
+        messages = [m.model_dump() for m in payload.messages]
+        command = parse_workspace_command(messages)
+        request_json = payload.model_dump(exclude_none=True)
+        if x_workspace_path:
+            request_json["x_workspace_path"] = x_workspace_path
 
-    # Execute workspace control commands before normal LLM inference.
-    if command is not None:
-        if command.name == "index":
-            candidate = detect_workspace(request_json=request_json, messages=messages)
-            if candidate:
-                workspace_session.set_workspace(candidate)
-        try:
+        # Execute workspace control commands before normal LLM inference.
+        if command is not None:
+            step = "workspace_command"
+            if command.name == "path":
+                workspace_hint = command.argument
+            if command.name == "index":
+                candidate = detect_workspace(request_json=request_json, messages=messages)
+                if candidate:
+                    workspace_session.set_workspace(candidate)
+                    workspace_hint = candidate
             logger.info("Executing workspace command before inference: %s", command.name)
             response_text = execute_workspace_command(
                 command=command,
@@ -410,79 +501,41 @@ def chat_completions(
                 indexer=indexer,
                 vector_store=vector_store,
             )
-        except Exception as exc:
-            logger.exception("Workspace command failed")
-            if command.name == "path":
-                if isinstance(exc, FileNotFoundError):
-                    step_name = "workspace_path_validate"
-                else:
-                    step_name = "qdrant_collection_create"
-            elif command.name == "index":
-                step_name = "workspace_index"
-            else:
-                step_name = "workspace_command"
-            error_payload = structured_error(
-                "workspace_init_failed",
-                "Workspace command failed",
-                step=step_name,
-                details={
-                    "workspace_root": command.argument if command.name == "path" else workspace_session.snapshot().workspace,
-                    "command": command.name,
-                },
-                exc=exc,
-            )
-            if _is_stream_request(payload, accept):
+            if stream_requested:
                 headers = {"Cache-Control": "no-cache", "Connection": "keep-alive"}
-                return StreamingResponse(_stream_error(error_payload), media_type="text/event-stream", headers=headers)
-            return _non_stream_error(error_payload)
-        if _is_stream_request(payload, accept):
-            headers = {"Cache-Control": "no-cache", "Connection": "keep-alive"}
-            return StreamingResponse(_stream_chunks(response_text), media_type="text/event-stream", headers=headers)
-        return _non_stream_response(response_text)
+                return StreamingResponse(
+                    _stream_chunks_safe(response_text, requested_model, workspace_session.snapshot().workspace),
+                    media_type="text/event-stream",
+                    headers=headers,
+                )
+            return _non_stream_response(response_text)
 
-    session_state = workspace_session.snapshot()
-    if session_state.stateless:
-        ws = None
-    elif session_state.workspace and "workspace" not in request_json and "x_workspace_path" not in request_json:
-        ws = session_state.workspace
-    else:
-        ws = detect_workspace(request_json=request_json, messages=messages)
-    resolved_workspace: str | None = None
-    tools: SandboxedTools | None = None
+        session_state = workspace_session.snapshot()
+        if session_state.stateless:
+            ws = None
+        elif session_state.workspace and "workspace" not in request_json and "x_workspace_path" not in request_json:
+            ws = session_state.workspace
+        else:
+            ws = detect_workspace(request_json=request_json, messages=messages)
+        workspace_hint = ws
 
-    if ws:
-        try:
+        tools: SandboxedTools | None = None
+        if ws:
+            step = "workspace_init"
             logger.info("Initializing workspace for chat: %s", ws)
             metadata = _load_workspace_metadata(ws)
             if metadata.get("trusted", False):
                 resolved_workspace = str(metadata["workspace_root"])
+                workspace_hint = resolved_workspace
                 policy = _workspace_policy_from_config(metadata)
                 tools = SandboxedTools(workspace=resolved_workspace, policy=policy)
                 workspace_session.set_workspace(resolved_workspace)
                 logger.info("Workspace initialized for chat: %s", resolved_workspace)
             else:
                 logger.info("Workspace found but not trusted for chat: %s", ws)
-        except FileNotFoundError:
-            # Invalid workspace path falls back to stateless mode for OpenAI compatibility.
-            resolved_workspace = None
-            tools = None
-            logger.info("Workspace path invalid, using stateless mode: %s", ws)
-        except Exception as exc:
-            logger.exception("Workspace initialization failed")
-            error_payload = structured_error(
-                "workspace_init_failed",
-                "Workspace initialization failed",
-                step="workspace_init",
-                details={"workspace_root": ws},
-                exc=exc,
-            )
-            if _is_stream_request(payload, accept):
-                headers = {"Cache-Control": "no-cache", "Connection": "keep-alive"}
-                return StreamingResponse(_stream_error(error_payload), media_type="text/event-stream", headers=headers)
-            return _non_stream_error(error_payload)
 
-    local_model = _map_model_to_local(payload.model)
-    try:
+        step = "agent_inference"
+        local_model = _map_model_to_local(payload.model)
         logger.info("Running agent inference: workspace=%s model=%s", resolved_workspace, local_model)
         response_text = agent_runner.run(
             workspace=resolved_workspace,
@@ -490,22 +543,30 @@ def chat_completions(
             tools=tools,
             local_model=local_model,
         )
-    except Exception as exc:
-        logger.exception("Agent/Ollama inference failed")
-        error_payload = structured_error(
-            "ollama_request_failed",
-            "LLM inference failed",
-            step="ollama_chat",
-            details={"workspace_root": resolved_workspace, "model": local_model},
-            exc=exc,
-        )
-        if _is_stream_request(payload, accept):
+
+        if stream_requested:
             headers = {"Cache-Control": "no-cache", "Connection": "keep-alive"}
-            return StreamingResponse(_stream_error(error_payload), media_type="text/event-stream", headers=headers)
-        return _non_stream_error(error_payload)
+            return StreamingResponse(
+                _stream_chunks_safe(response_text, requested_model, resolved_workspace),
+                media_type="text/event-stream",
+                headers=headers,
+            )
 
-    if _is_stream_request(payload, accept):
-        headers = {"Cache-Control": "no-cache", "Connection": "keep-alive"}
-        return StreamingResponse(_stream_chunks(response_text), media_type="text/event-stream", headers=headers)
+        return _non_stream_response(response_text)
 
-    return _non_stream_response(response_text)
+    except Exception as exc:
+        logger.exception("Chat completion failed")
+        error_content = _build_openai_error_content(
+            exc=exc,
+            request_model=requested_model,
+            workspace_root=resolved_workspace or workspace_hint,
+            step=step,
+        )
+        if stream_requested:
+            headers = {"Cache-Control": "no-cache", "Connection": "keep-alive"}
+            return StreamingResponse(
+                _openai_stream_error_chunks(content=error_content, request_model=requested_model),
+                media_type="text/event-stream",
+                headers=headers,
+            )
+        return _openai_error_non_stream(content=error_content, request_model=requested_model)
